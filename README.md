@@ -34,6 +34,25 @@ Then:
 If you don't want Wayland (or lack its headers), add `-DGLFW_BUILD_WAYLAND=OFF`
 to the first command.
 
+### Windows
+
+With Visual Studio 2022 (the "Desktop development with C++" workload includes
+CMake) and git, from a Developer PowerShell:
+
+    cmake -S . -B build
+    cmake --build build --config Release
+
+The exe lands in `build\Release\zdmv.exe`. With MinGW-w64 instead, add
+`-G "MinGW Makefiles"` to the first command; it links statically, so
+`build\zdmv.exe` runs on its own.
+
+To cross-compile from Linux, install `g++-mingw-w64-x86-64-posix` and pass a
+toolchain file that sets `CMAKE_SYSTEM_NAME Windows` and the
+`x86_64-w64-mingw32-gcc-posix` / `g++-posix` compilers.
+
+On Windows, settings are kept in `%APPDATA%\zdmv`, and `~` in the path box
+means your user folder.
+
 ## Run
 
     ./build/zdmv                  # reopens the last folder you browsed

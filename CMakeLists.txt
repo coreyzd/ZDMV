@@ -77,6 +77,17 @@ target_include_directories(zdmv PRIVATE src third_party/glad/include)
 target_include_directories(zdmv SYSTEM PRIVATE ${tinyobjloader_SOURCE_DIR} ${stb_SOURCE_DIR})
 target_link_libraries(zdmv PRIVATE glfw glm::glm imgui)
 
+if(WIN32)
+  # Windowed app: no console window behind the viewer. Keep main() as the entry point.
+  set_target_properties(zdmv PROPERTIES WIN32_EXECUTABLE ON)
+  if(MSVC)
+    target_link_options(zdmv PRIVATE /ENTRY:mainCRTStartup)
+  elseif(MINGW)
+    # Self-contained exe: no libstdc++/libgcc/winpthread DLLs to ship alongside it.
+    target_link_options(zdmv PRIVATE -static)
+  endif()
+endif()
+
 if(MSVC)
   target_compile_options(zdmv PRIVATE /W4)
 else()

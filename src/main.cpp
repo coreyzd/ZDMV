@@ -28,6 +28,19 @@
 
 namespace fs = std::filesystem;
 
+#ifdef _WIN32
+// Declared directly rather than pulling in <windows.h> and its macros.
+extern "C" __declspec(dllimport) int __stdcall MessageBoxA(void*, const char*, const char*, unsigned);
+#endif
+
+// Startup failures: ZDMV is a windowed app on Windows, so stderr goes nowhere.
+static void fatal(const std::string& message) {
+    std::fprintf(stderr, "%s\n", message.c_str());
+#ifdef _WIN32
+    MessageBoxA(nullptr, message.c_str(), "ZDMV", 0x10 /* MB_ICONERROR */);
+#endif
+}
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -76,7 +89,11 @@ void writeContentPaths() {
 
 std::string expandHome(std::string path) {
     if (!path.empty() && path[0] == '~') {
-        if (const char* home = std::getenv("HOME")) path = std::string(home) + path.substr(1);
+        const char* home = std::getenv("HOME");
+#ifdef _WIN32
+        if (!home || !*home) home = std::getenv("USERPROFILE");
+#endif
+        if (home && *home) path = std::string(home) + path.substr(1);
     }
     return path;
 }
@@ -485,14 +502,14 @@ int main(int argc, char** argv) {
         window = glfwCreateWindow(1400, 860, "ZDMV", nullptr, nullptr);
     }
     if (!window) {
-        std::fprintf(stderr, "Could not create an OpenGL 3.3 window.\n");
+        fatal("Could not create an OpenGL 3.3 window. Check that your graphics driver is installed and up to date.");
         glfwTerminate();
         return 1;
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     if (!gladLoadGL(glfwGetProcAddress)) {
-        std::fprintf(stderr, "Could not load OpenGL.\n");
+        fatal("Could not load OpenGL.");
         return 1;
     }
 
@@ -502,7 +519,7 @@ int main(int argc, char** argv) {
 
     std::string error;
     if (!app.renderer.init(error)) {
-        std::fprintf(stderr, "%s\n", error.c_str());
+        fatal(error);
         return 1;
     }
 
