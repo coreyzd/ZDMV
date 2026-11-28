@@ -66,6 +66,7 @@ add_executable(zdmv
   src/normals.cpp
   src/source/content.cpp
   src/source/phy.cpp
+  src/source/pose.cpp
   src/source/vmt.cpp
   src/source/vtf.cpp
   src/loaders/mdl_loader.cpp

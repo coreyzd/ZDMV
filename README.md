@@ -77,8 +77,10 @@ filter box narrows the model list. Drag the panel's right edge to resize it.
 
 ## Source models
 
-Only the reference pose of the highest LOD is shown, with the default
-bodygroups and skin. Bones, animation, flexes and physics are ignored, and
+Only the highest LOD is shown, with the default bodygroups and skin, posed at
+the first frame of the model's first sequence: the way it stands in the game
+and in Hammer, which for most props is a quarter turn from how the vertices
+are stored. Animation is otherwise not played, flexes are ignored, and
 materials use just their `$basetexture` (plus `$translucent`/`$alphatest`).
 
 A model stores material names relative to a game folder, so ZDMV has to work
@@ -97,8 +99,8 @@ to see which texture each material resolved to, or what was missing; the
 Content paths dialog lists the folders searched for the current model.
 
 If the model has a `.phy` file, tick **Physics model** to overlay its
-collision hulls in cyan. Ragdoll solids are placed using the reference-pose
-skeleton.
+collision hulls in cyan. Ragdoll solids are placed on the skeleton in that
+same pose.
 
 Content packed in `.vpk` archives is not read, so stock game materials need
 to be extracted, or you'll see models untextured.

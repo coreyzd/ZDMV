@@ -4,8 +4,9 @@
 //   .mdl  structure: body parts, meshes, material names
 //   .vvd  vertex data shared by all meshes
 //   .vtx  optimised triangle lists that index into the VVD
-// Only the reference pose of the highest LOD is loaded; bones, animation and
-// flexes are ignored.
+// Only the highest LOD is loaded, posed at the first frame of the model's
+// first sequence (which is how the game and Hammer show a prop that isn't
+// playing anything); flexes are ignored.
 #include "loaders/loader.h"
 
 #include <cstring>
@@ -15,6 +16,7 @@
 #include "source/binary_reader.h"
 #include "source/content.h"
 #include "source/phy.h"
+#include "source/pose.h"
 #include "source/vmt.h"
 #include "util.h"
 
@@ -27,7 +29,6 @@ constexpr int kMdlTextureSize = 64;
 constexpr int kMdlBodyPartSize = 16;
 constexpr int kMdlModelSize = 148;
 constexpr int kMdlMeshSize = 116;
-constexpr int kMdlBoneSize = 216;
 constexpr int kVvdVertexSize = 48;
 constexpr int kVtxMeshSize = 9;
 constexpr int kVtxVertexSize = 9;
@@ -197,10 +198,19 @@ public:
         // list for a given LOD. For LOD 0 that is every fixup, in order.
         const int fixupCount = vvd.i32(48), fixupStart = vvd.i32(52), vertexStart = vvd.i32(56);
         std::vector<Vertex> vertices;
+        std::vector<BoneWeights> weights;
         auto appendVertices = [&](std::int64_t first, std::int64_t count) {
             vvd.require(vertexStart + first * kVvdVertexSize, count * kVvdVertexSize);
             for (std::int64_t i = 0; i < count; ++i) {
-                const std::int64_t at = vertexStart + (first + i) * kVvdVertexSize + 16; // skip bone weights
+                const std::int64_t weightsAt = vertexStart + (first + i) * kVvdVertexSize;
+                BoneWeights w;
+                w.count = std::min<int>(vvd.u8(weightsAt + 15), 3);
+                for (int k = 0; k < 3; ++k) {
+                    w.weight[k] = vvd.f32(weightsAt + k * 4);
+                    w.bone[k] = vvd.u8(weightsAt + 12 + k);
+                }
+                weights.push_back(w);
+                const std::int64_t at = weightsAt + 16;
                 Vertex v;
                 v.position = glm::vec3(vvd.f32(at), vvd.f32(at + 4), vvd.f32(at + 8));
                 v.normal = glm::vec3(vvd.f32(at + 12), vvd.f32(at + 16), vvd.f32(at + 20));
@@ -216,6 +226,11 @@ public:
         } else {
             appendVertices(0, vvd.i32(16)); // numLODVertexes[0]
         }
+
+        // The file has the vertices in the reference pose; move them to the
+        // pose the model is actually shown in (see source/pose.h).
+        const MdlPose pose = readMdlPose(mdl);
+        skinVertices(pose, weights, vertices);
 
         // --- Materials ---------------------------------------------------------
         const int textureCount = mdl.i32(204), textureOffset = mdl.i32(208);
@@ -256,15 +271,45 @@ public:
             return false;
         }
 
-        loadPhysics(path, mdl, out);
+        loadPhysics(path, pose, out);
 
         out.zUp = true;
         return true;
     }
 
 private:
+    // mstudioboneweight_t: up to three bones a vertex follows.
+    struct BoneWeights {
+        float weight[3] = {0.0f, 0.0f, 0.0f};
+        std::uint8_t bone[3] = {0, 0, 0};
+        int count = 0;
+    };
+
+    // Moves reference-pose vertices to `pose`.
+    static void skinVertices(const MdlPose& pose, const std::vector<BoneWeights>& weights,
+                             std::vector<Vertex>& vertices) {
+        if (pose.skin.empty()) return;
+        for (std::size_t i = 0; i < vertices.size(); ++i) {
+            const BoneWeights& w = weights[i];
+            glm::mat4 blend(0.0f);
+            float total = 0.0f;
+            for (int k = 0; k < w.count; ++k) {
+                if (w.bone[k] >= pose.skin.size()) continue;
+                blend += pose.skin[w.bone[k]] * w.weight[k];
+                total += w.weight[k];
+            }
+            if (total > 1e-6f) blend /= total;
+            else blend = pose.skin[0]; // no usable weights: follow the root
+            Vertex& v = vertices[i];
+            v.position = glm::vec3(blend * glm::vec4(v.position, 1.0f));
+            const glm::vec3 normal = glm::mat3(blend) * v.normal;
+            const float length = glm::length(normal);
+            if (length > 1e-6f) v.normal = normal / length;
+        }
+    }
+
     // Collision model from the .phy, if there is one. Never fatal.
-    static void loadPhysics(const fs::path& path, const BinaryFile& mdl, Model& out) {
+    static void loadPhysics(const fs::path& path, const MdlPose& pose, Model& out) {
         const fs::path phyPath = findCompanion(path, {".phy"});
         if (phyPath.empty()) return;
         std::vector<PhySolid> solids;
@@ -273,40 +318,27 @@ private:
             out.warnings += "Could not read the .phy file: " + error + "\n";
             return;
         }
-        try {
-            // A lone solid is in model space. With several (a ragdoll), each
-            // is in the space of the bone it is named after, so move it to
-            // model space with that bone's reference-pose transform.
-            const bool jointed = solids.size() > 1;
-            const int boneCount = mdl.i32(156), boneOffset = mdl.i32(160);
-            for (const PhySolid& solid : solids) {
-                glm::mat4 boneToModel(1.0f);
-                if (jointed) {
-                    for (int b = 0; b < boneCount; ++b) {
-                        const std::int64_t bone = boneOffset + std::int64_t(b) * kMdlBoneSize;
-                        if (!equalsNoCase(mdl.cstring(bone + mdl.i32(bone)), solid.name)) continue;
-                        // poseToBone is a row-major 3x4 taking model space to bone space.
-                        glm::mat4 poseToBone(1.0f);
-                        for (int row = 0; row < 3; ++row) {
-                            for (int col = 0; col < 4; ++col) poseToBone[col][row] = mdl.f32(bone + 96 + (row * 4 + col) * 4);
-                        }
-                        boneToModel = glm::inverse(poseToBone);
-                        break;
-                    }
+        // A lone solid is compiled in model space, as the model stands in the
+        // game. With several (a ragdoll), each is in the space of the bone it
+        // is named after, so it goes wherever the pose puts that bone.
+        const bool jointed = solids.size() > 1;
+        for (const PhySolid& solid : solids) {
+            glm::mat4 boneToModel(1.0f);
+            if (jointed) {
+                for (std::size_t b = 0; b < pose.boneNames.size(); ++b) {
+                    if (!equalsNoCase(pose.boneNames[b], solid.name)) continue;
+                    boneToModel = pose.boneToModel[b];
+                    break;
                 }
-                const std::uint32_t base = static_cast<std::uint32_t>(out.physics.vertices.size());
-                for (const glm::vec3& p : solid.vertices) {
-                    Vertex v;
-                    v.position = glm::vec3(boneToModel * glm::vec4(p, 1.0f));
-                    out.physics.vertices.push_back(v);
-                }
-                for (std::uint32_t index : solid.indices) out.physics.indices.push_back(base + index);
-                out.physicsParts += solid.convexCount;
             }
-        } catch (const std::exception&) {
-            out.physics = Mesh{};
-            out.physicsParts = 0;
-            out.warnings += "Could not place the physics model on the skeleton.\n";
+            const std::uint32_t base = static_cast<std::uint32_t>(out.physics.vertices.size());
+            for (const glm::vec3& p : solid.vertices) {
+                Vertex v;
+                v.position = glm::vec3(boneToModel * glm::vec4(p, 1.0f));
+                out.physics.vertices.push_back(v);
+            }
+            for (std::uint32_t index : solid.indices) out.physics.indices.push_back(base + index);
+            out.physicsParts += solid.convexCount;
         }
     }
 

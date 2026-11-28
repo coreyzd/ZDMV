@@ -15,7 +15,8 @@
 struct PhySolid {
     // From the file's text section. For ragdolls this is the bone the solid
     // is attached to, and the vertices are in that bone's space; for a
-    // single-solid model the vertices are already in model space.
+    // single-solid model the vertices are already in model space (as the
+    // model stands in the game, not its reference pose: see source/pose.h).
     std::string name;
     std::vector<glm::vec3> vertices;    // Source units and axes
     std::vector<std::uint32_t> indices; // triangle list
